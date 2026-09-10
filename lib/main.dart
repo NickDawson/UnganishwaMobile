@@ -1,133 +1,165 @@
-import 'package:briefing/bookmarked_article_list.dart';
-import 'package:briefing/briefing_sliver_list.dart';
-import 'package:briefing/model/article.dart';
-import 'package:briefing/theme/theme.dart';
-import 'package:briefing/widget/main_sliverappbar.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
-void main() {
-  runApp(MyApp());
-}
+import 'model/article.dart';
+import 'service/api_service.dart';
 
-class MyApp extends StatelessWidget {
+void main() => runApp(const UnganishwaApp());
+
+class UnganishwaApp extends StatelessWidget {
+  const UnganishwaApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Briefing',
-      theme: buildAppTheme(),
-      home: MyHomePage(title: 'Briefing'),
+      title: 'Unganishwa',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff087f73)),
+        useMaterial3: true,
+      ),
+      home: const NewsHomePage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  MyHomePage({Key key, this.title}) : super(key: key);
-  final String title;
+class NewsHomePage extends StatefulWidget {
+  const NewsHomePage({super.key});
 
   @override
-  _MyHomePageState createState() => _MyHomePageState();
+  State<NewsHomePage> createState() => _NewsHomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _selectedIndex = 0;
-  final menus = [Menu.local, Menu.headlines, Menu.favorites, Menu.agencies];
+class _NewsHomePageState extends State<NewsHomePage> {
+  final ApiService _api = ApiService();
+  final Set<String> _favorites = <String>{};
+  final List<String> _countries = const ['tanzania', 'kenya', 'uganda', 'rwanda', 'burundi'];
+  final List<String> _topics = const ['Top Stories', 'National', 'Business', 'Technology', 'Health', 'Sports'];
+  String _country = 'tanzania';
+  String _topic = 'Top Stories';
+  String _query = '';
+  int _tab = 0;
+  Future<List<Article>>? _articles;
 
   @override
   void initState() {
     super.initState();
+    _loadArticles();
   }
 
   @override
   void dispose() {
+    _api.dispose();
     super.dispose();
   }
 
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  void _loadArticles() {
+    setState(() {
+      _articles = _query.isEmpty
+          ? _api.fetchArticles(country: _country, topic: _topic)
+          : _api.search(_query);
+    });
+  }
+
+  Future<void> _openArticle(Article article) async {
+    final uri = Uri.tryParse(article.link);
+    if (uri != null && await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    Widget getScreen() {
-      if (menus[_selectedIndex] == Menu.favorites) {
-        return BookmarkArticleList();
-      }
-      if (menus[_selectedIndex] == Menu.local ||
-          menus[_selectedIndex] == Menu.headlines) {
-        return BriefingSliverList(menu: menus[_selectedIndex]);
-      }
-      return SliverList(
-          delegate: SliverChildListDelegate([
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 64.0),
-          child: Center(
-            child: Text('Agencies(sources) comming soon...',
-                style: TextStyle(fontSize: 22)),
-          ),
-        )
-      ]));
-    }
-
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: SystemUiOverlayStyle(
-        statusBarIconBrightness: Brightness.dark,
-        statusBarBrightness: Brightness.light,
-        statusBarColor: Theme.of(context).primaryColor,
-        systemNavigationBarColor: Colors.white,
-        systemNavigationBarIconBrightness: Brightness.dark,
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('unganishwa.', style: TextStyle(fontWeight: FontWeight.w800)),
+        actions: [IconButton(icon: const Icon(Icons.search), onPressed: _showSearch)],
       ),
-      child: SafeArea(
-        child: Scaffold(
-          key: _scaffoldKey,
-          body: CustomScrollView(
-            slivers: <Widget>[
-              MainSliverAppBar(title: 'Briefing'),
-              getScreen(),
-            ],
+      body: _tab == 1 ? _favoritesView() : _feedView(),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tab,
+        onDestinationSelected: (value) => setState(() => _tab = value),
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.newspaper_outlined), selectedIcon: Icon(Icons.newspaper), label: 'News'),
+          NavigationDestination(icon: Icon(Icons.bookmark_border), selectedIcon: Icon(Icons.bookmark), label: 'Saved'),
+        ],
+      ),
+    );
+  }
+
+  Widget _feedView() {
+    return RefreshIndicator(
+      onRefresh: () async => _loadArticles(),
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+        children: [
+          _filterRow(),
+          const SizedBox(height: 16),
+          FutureBuilder<List<Article>>(
+            future: _articles,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Padding(padding: EdgeInsets.all(48), child: Center(child: CircularProgressIndicator()));
+              }
+              if (snapshot.hasError) return _errorState(snapshot.error.toString());
+              final articles = snapshot.data ?? const <Article>[];
+              if (articles.isEmpty) return _errorState('No stories found.');
+              return Column(children: articles.map(_articleCard).toList());
+            },
           ),
-          bottomNavigationBar: BottomAppBar(
-            color: Theme.of(context).primaryColor,
-            child: Container(
-              decoration: BoxDecoration(boxShadow: [
-                BoxShadow(
-                    color: Colors.cyan[100],
-                    offset: Offset(-2.0, 2.0),
-                    blurRadius: 2.0,
-                    spreadRadius: 2.0)
-              ]),
-              height: 72.0,
-              child: BottomNavigationBar(
-                selectedItemColor: Theme.of(context).accentColor,
-                currentIndex: _selectedIndex,
-                onTap: (val) => _onItemTapped(val),
-                type: BottomNavigationBarType.fixed,
-                backgroundColor: Theme.of(context).primaryColor,
-                selectedFontSize: 18.0,
-                unselectedFontSize: 17.0,
-                items: [
-                  BottomNavigationBarItem(
-                      icon: Icon(Icons.local_library), title: Text('Local')),
-                  BottomNavigationBarItem(
-                      icon: Icon(Icons.language), title: Text('Headlines')),
-                  BottomNavigationBarItem(
-                      icon: Icon(Icons.bookmark_border),
-                      title: Text('Favorites')),
-                  BottomNavigationBarItem(
-                      icon: Icon(Icons.filter_none), title: Text('Agencies'))
-                ],
-                elevation: 5.0,
-              ),
-            ),
-          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _filterRow() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      DropdownButton<String>(
+        value: _country,
+        isExpanded: true,
+        items: _countries.map((country) => DropdownMenuItem(value: country, child: Text(country.toUpperCase()))).toList(),
+        onChanged: (value) { if (value != null) { setState(() { _country = value; _query = ''; }); _loadArticles(); } },
+      ),
+      SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(children: _topics.map((topic) => Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: ChoiceChip(label: Text(topic), selected: _topic == topic, onSelected: (_) { setState(() { _topic = topic; _query = ''; }); _loadArticles(); }),
+        )).toList()),
+      ),
+    ]);
+  }
+
+  Widget _articleCard(Article article) {
+    final saved = _favorites.contains(article.link);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: InkWell(
+        onTap: () => _openArticle(article),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('${article.source} · ${article.published}', style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            Text(article.title, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            Text(article.summary, maxLines: 4, overflow: TextOverflow.ellipsis),
+            Align(alignment: Alignment.centerRight, child: IconButton(icon: Icon(saved ? Icons.bookmark : Icons.bookmark_border), onPressed: () => setState(() => saved ? _favorites.remove(article.link) : _favorites.add(article.link)))),
+          ]),
         ),
       ),
     );
   }
 
-  void _onItemTapped(int index) {
-    setState(() {
-      _selectedIndex = index;
-    });
-//    Navigator.pop(context);
+  Widget _favoritesView() => ListView(padding: const EdgeInsets.all(16), children: [const Text('Saved stories', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)), const SizedBox(height: 16), Text(_favorites.isEmpty ? 'Stories you save will appear here.' : '${_favorites.length} saved link(s).')]);
+
+  Widget _errorState(String message) => Padding(padding: const EdgeInsets.all(32), child: Column(children: [const Icon(Icons.cloud_off, size: 48), const SizedBox(height: 12), Text(message, textAlign: TextAlign.center), TextButton(onPressed: _loadArticles, child: const Text('Try again'))]));
+
+  Future<void> _showSearch() async {
+    final controller = TextEditingController(text: _query);
+    final query = await showDialog<String>(context: context, builder: (context) => AlertDialog(title: const Text('Search Unganishwa'), content: TextField(controller: controller, autofocus: true, decoration: const InputDecoration(hintText: 'Search stories')), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Search'))]));
+    controller.dispose();
+    if (query != null) { setState(() => _query = query); _loadArticles(); }
   }
 }
